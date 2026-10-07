@@ -5,9 +5,9 @@ import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 
 const VOICES = {
-  Casual: "honestly 15-20k for 4 days if u do scooters + shacks 😌 sending u my budget sheet",
-  Hinglish: "yaar 15-20k mein ho jayega 4 din, scooty aur shacks karo. budget sheet bhejti hoon 😌",
-  Professional: "Roughly ₹15,000-20,000 for four days with a scooter and beach shack stays. I'll share my budget breakdown.",
+  Casual: "honestly $200-250 for 4 days if u do scooters + shacks 😌 sending u my budget sheet",
+  Playful: "ok so like $200-250 for 4 days!! scooter + beach shacks = elite 🛵 budget sheet coming ur way",
+  Professional: "Roughly $200-250 for four days with a scooter and beach shack stays. I'll share my budget breakdown.",
 } as const;
 
 type Voice = keyof typeof VOICES;
@@ -16,7 +16,7 @@ const RULES = [
   "Brand deals always come to me",
   "Never quote my rates",
   "Archive obvious spam",
-  "Reply in Hinglish when they do",
+  "Loop in my manager on big deals",
 ];
 
 const CAMPAIGNS = [

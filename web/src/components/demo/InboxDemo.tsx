@@ -284,7 +284,7 @@ function Detail({ id, takenOver, onTakeOver }: { id: string; takenOver: boolean;
         <dl className="mt-3 divide-y divide-line">
           <Row k="Brand" v="Kova Travel Gear" />
           <Row k="Ask" v="3 UGC reels + 1 story" />
-          <Row k="Budget mentioned" v="₹50,000" />
+          <Row k="Budget mentioned" v="$1,500" />
           <Row k="Timeline" v="Shoot in November" />
           <Row k="Lead score" v={<span className="text-accent-ink">86, very high</span>} />
         </dl>
@@ -292,7 +292,7 @@ function Detail({ id, takenOver, onTakeOver }: { id: string; takenOver: boolean;
           <div className="mt-4 rounded-2xl bg-bg p-4 text-[14px] leading-relaxed">
             <p className="text-[12px] font-medium text-muted">Draft</p>
             <p className="mt-1">
-              Hey Rahul! Love Kova&apos;s stuff. Happy to do this. For 3 reels + a story my rate is ₹58,000, usage rights for
+              Hey Rahul! Love Kova&apos;s stuff. Happy to do this. For 3 reels + a story my rate is $1,800, usage rights for
               3 months included. Can you share the brief?
             </p>
           </div>
