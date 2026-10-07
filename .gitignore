@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+.vercel/
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets and local data
+.env*
+!.env.example
+web/.data/
+
+# internal product/strategy notes, not for a public repo
+context.md
