@@ -4,11 +4,21 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Check, Copy, WhatsappLogo, X } from "@phosphor-icons/react";
 import { attribution, pixel, sessionId, track } from "@/lib/analytics";
-import { CREATOR_TYPES, DM_RANGES, FOLLOWER_RANGES } from "@/lib/validation";
+import {
+  CREATOR_TYPES,
+  DM_RANGES,
+  FOLLOWER_RANGES,
+  formatPhoneInput,
+  normalizeEmail,
+  normalizeHandle,
+} from "@/lib/validation";
 
 type Step = "email" | "instagram" | "details" | "done";
 
-type Saved = { email?: string; instagram?: string; position?: number; step?: Step };
+type Saved = { email?: string; instagram?: string; step?: Step };
+
+type SaveState = "saving" | "saved" | "error";
+type SaveResult = { ok: boolean; error?: string };
 
 const SAVED_KEY = "elissya_joined";
 const EASE = [0.16, 1, 0.3, 1] as const;
@@ -41,10 +51,13 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
   const [creatorType, setCreatorType] = useState("");
   const [followers, setFollowers] = useState("");
   const [dms, setDms] = useState("");
-  const [whatsapp, setWhatsapp] = useState("");
+  const [phone, setPhone] = useState("");
   const [honeypot, setHoneypot] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("saved");
+  // Saves run in the background, one after another, so steps advance instantly
+  // instead of waiting on the Google Sheets round trip (often several seconds).
+  const queue = useRef<Promise<SaveResult>>(Promise.resolve({ ok: true }));
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,65 +84,88 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
     onClose();
   }
 
-  async function submit(payload: Record<string, unknown>) {
-    setBusy(true);
-    setError(null);
+  async function post(payload: Record<string, unknown>): Promise<SaveResult> {
     try {
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, email, sid: sessionId(), website: honeypot }),
+        // keepalive lets the save finish even if the visitor closes the tab right away.
+        keepalive: true,
+        body: JSON.stringify({ ...payload, sid: sessionId(), website: honeypot, attribution: attribution() }),
       });
-      const data = (await res.json()) as { ok: boolean; error?: string; position?: number; instagram?: string };
-      if (!data.ok) {
-        setError(data.error ?? "Something went wrong. Try again.");
-        return null;
-      }
-      return data;
+      return (await res.json()) as SaveResult;
     } catch {
-      setError("You seem to be offline. Try again.");
-      return null;
-    } finally {
-      setBusy(false);
+      return { ok: false, error: "offline" };
     }
   }
 
-  async function onEmail(e: React.FormEvent) {
+  /** Queue a save. Every payload carries the email, so any single request can create the row. */
+  function save(payload: Record<string, unknown>) {
+    setSaveState("saving");
+    const run = queue.current.then(() => post(payload));
+    queue.current = run;
+    return run;
+  }
+
+  function onEmail(e: React.FormEvent) {
     e.preventDefault();
-    const data = await submit({ step: "email", attribution: attribution() });
-    if (!data) return;
+    const clean = normalizeEmail(email);
+    if (!clean) {
+      setError("That email doesn't look right.");
+      return;
+    }
+    setError(null);
+    save({ step: "email", email: clean });
     track("email_submitted");
     pixel("track", "Lead");
-    const next = { ...saved, email: email.trim().toLowerCase(), position: data.position, step: "instagram" as Step };
+    const next = { ...saved, email: clean, step: "instagram" as Step };
     setSaved(next);
     persist(next);
     setStep("instagram");
   }
 
-  async function onInstagram(e: React.FormEvent) {
+  function onInstagram(e: React.FormEvent) {
     e.preventDefault();
-    const data = await submit({ step: "instagram", instagram });
-    if (!data) return;
+    const handle = normalizeHandle(instagram);
+    if (!handle) {
+      setError("Use your handle, like @wanderbuddy.");
+      return;
+    }
+    setError(null);
+    save({ step: "instagram", email: saved.email, instagram: handle });
     track("instagram_submitted");
-    const next = { ...saved, instagram: data.instagram, step: "details" as Step };
+    const next = { ...saved, instagram: handle, step: "details" as Step };
     setSaved(next);
     persist(next);
     setStep("details");
   }
 
-  async function onDetails(skipped: boolean) {
-    const data = await submit(
-      skipped
-        ? { step: "details" }
-        : { step: "details", creator_type: creatorType, followers, dms_per_day: dms, whatsapp },
-    );
-    if (!data) return;
+  async function finish(skipped: boolean) {
+    // The final save repeats everything collected, so it succeeds even if an earlier one was lost.
+    const payload = {
+      step: "details",
+      email: saved.email,
+      instagram: saved.instagram,
+      ...(skipped ? {} : { creator_type: creatorType, followers, dms_per_day: dms, whatsapp: phone }),
+    };
+    let result = await save(payload);
+    if (!result.ok && result.error === "offline") result = await save(payload);
+    if (result.ok) {
+      setSaveState("saved");
+    } else {
+      setSaveState("error");
+    }
+    return result.ok;
+  }
+
+  function onDetails(skipped: boolean) {
     track("details_submitted", { detail: skipped ? "skipped" : "answered" });
     pixel("track", "CompleteRegistration");
     const next = { ...saved, step: "done" as Step };
     setSaved(next);
     persist(next);
     setStep("done");
+    void finish(skipped);
   }
 
   const stepIndex = { email: 0, instagram: 1, details: 2, done: 3 }[step];
@@ -222,7 +258,7 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
                       onChange={setEmail}
                       error={error}
                     />
-                    <Primary busy={busy} disabled={!email.trim()}>
+                    <Primary disabled={!email.trim()}>
                       Continue
                     </Primary>
                   </form>
@@ -247,7 +283,7 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
                       onChange={setInstagram}
                       error={error}
                     />
-                    <Primary busy={busy} disabled={!instagram.trim()}>
+                    <Primary disabled={!instagram.trim()}>
                       Continue
                     </Primary>
                   </form>
@@ -266,38 +302,35 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
                       <Chips label="Followers" options={FOLLOWER_RANGES} value={followers} onChange={setFollowers} />
                       <Chips label="DMs you get a day" options={DM_RANGES} value={dms} onChange={setDms} />
                       <div className="flex flex-col gap-2">
-                        <label htmlFor="wl-wa" className="text-sm font-medium">
+                        <label htmlFor="wl-phone" className="text-sm font-medium">
                           WhatsApp <span className="font-normal text-muted">(optional, for a faster invite)</span>
                         </label>
                         <input
-                          id="wl-wa"
+                          id="wl-phone"
                           type="tel"
                           inputMode="tel"
                           autoComplete="tel"
-                          placeholder="+91 98xxx xxxxx"
-                          value={whatsapp}
-                          onChange={(e) => setWhatsapp(e.target.value)}
+                          placeholder="(555) 123-4567"
+                          aria-describedby="wl-phone-help"
+                          value={phone}
+                          onChange={(e) => setPhone((prev) => nextPhoneValue(prev, e.target.value))}
                           className="h-12 rounded-full border border-line bg-bg px-5 text-[15px] outline-none transition-colors placeholder:text-muted focus:border-ink"
                         />
+                        <p id="wl-phone-help" className="px-5 text-xs text-muted">
+                          US numbers by default. For other countries, start with + and the country code.
+                        </p>
                       </div>
                     </div>
-                    {error && (
-                      <p role="alert" className="mt-4 text-sm text-accent-ink">
-                        {error}
-                      </p>
-                    )}
                     <div className="mt-7 flex items-center gap-3">
                       <button
                         type="button"
-                        disabled={busy}
                         onClick={() => onDetails(false)}
                         className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-ink text-[15px] font-medium text-bg transition-[transform,background-color] hover:bg-cta-hover hover:text-cta-hover-fg active:scale-[0.98] disabled:opacity-50"
                       >
-                        {busy ? "Saving..." : "Join the list"}
+                        Join the list
                       </button>
                       <button
                         type="button"
-                        disabled={busy}
                         onClick={() => onDetails(true)}
                         className="h-12 rounded-full px-5 text-[15px] text-muted transition-colors hover:text-ink"
                       >
@@ -307,7 +340,7 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
                   </div>
                 )}
 
-                {step === "done" && <Done saved={saved} />}
+                {step === "done" && <Done saved={saved} saveState={saveState} onRetry={() => void finish(false)} />}
               </motion.div>
             </AnimatePresence>
           </motion.div>
@@ -315,6 +348,16 @@ export function WaitlistSheet({ open, onClose }: { open: boolean; onClose: () =>
       )}
     </AnimatePresence>
   );
+}
+
+/** Formats as you type; deleting a ")" or "-" removes the digit before it instead of getting stuck. */
+function nextPhoneValue(prev: string, raw: string) {
+  const sameDigits = raw.replace(/\D/g, "") === prev.replace(/\D/g, "");
+  if (raw.length < prev.length && sameDigits) {
+    const digits = raw.replace(/\D/g, "").slice(0, -1);
+    return formatPhoneInput((raw.trimStart().startsWith("+") ? "+" : "") + digits);
+  }
+  return formatPhoneInput(raw);
 }
 
 function Question({ id, htmlFor, children }: { id: string; htmlFor: string; children: React.ReactNode }) {
@@ -367,15 +410,15 @@ function Field({
   );
 }
 
-function Primary({ busy, disabled, children }: { busy: boolean; disabled: boolean; children: React.ReactNode }) {
+function Primary({ disabled, children }: { disabled: boolean; children: React.ReactNode }) {
   return (
     <button
       type="submit"
-      disabled={busy || disabled}
+      disabled={disabled}
       className="mt-4 inline-flex h-14 w-full items-center justify-center gap-2 rounded-full bg-ink text-base font-medium text-bg transition-[transform,background-color,opacity] hover:bg-cta-hover hover:text-cta-hover-fg active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink disabled:hover:text-bg"
     >
-      {busy ? "Saving..." : children}
-      {!busy && <ArrowRight size={18} weight="bold" />}
+      {children}
+      <ArrowRight size={18} weight="bold" />
     </button>
   );
 }
@@ -416,7 +459,7 @@ function Chips<T extends readonly string[]>({
   );
 }
 
-function Done({ saved }: { saved: Saved }) {
+function Done({ saved, saveState, onRetry }: { saved: Saved; saveState: SaveState; onRetry: () => void }) {
   const [copied, setCopied] = useState(false);
   const link =
     typeof window !== "undefined"
@@ -445,9 +488,16 @@ function Done({ saved }: { saved: Saved }) {
         <Check size={26} weight="bold" />
       </motion.div>
       <h2 id="waitlist-title" className="mt-6 font-display text-[34px] leading-[1.05] font-semibold tracking-tight">
-        You&apos;re in.
-        {saved.position ? <span className="text-muted"> #{saved.position} on the list.</span> : null}
+        You&apos;re on the list.
       </h2>
+      {saveState === "error" && (
+        <p role="alert" className="mt-3 flex flex-wrap items-center gap-x-2 text-sm text-accent-ink">
+          We couldn&apos;t save your spot.
+          <button type="button" onClick={onRetry} className="font-medium underline underline-offset-4">
+            Try again
+          </button>
+        </p>
+      )}
       <p className="mt-3 text-[15px] leading-relaxed text-muted">
         We&apos;ll email {saved.email ? <span className="text-ink">{saved.email}</span> : "you"} when your spot opens. Know a
         creator drowning in DMs? Send them your link.

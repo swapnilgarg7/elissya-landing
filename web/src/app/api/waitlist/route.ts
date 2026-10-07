@@ -18,7 +18,7 @@ export async function POST(req: Request) {
 
   // Honeypot: real people never see or fill this field.
   if (typeof body.website === "string" && body.website) {
-    return Response.json({ ok: true, position: 0 });
+    return Response.json({ ok: true });
   }
 
   const email = normalizeEmail(body.email);
@@ -33,17 +33,21 @@ export async function POST(req: Request) {
     step: "email",
   };
 
+  // Requests can arrive out of order or alone (the client saves in the background),
+  // so every step may carry attribution and the Instagram handle.
+  Object.assign(patch, sanitizeAttribution(body.attribution));
+  const instagram = body.instagram ? normalizeHandle(body.instagram) : null;
+  if (instagram) patch.instagram = instagram;
+
   if (body.step === "email") {
-    Object.assign(patch, sanitizeAttribution(body.attribution));
+    // email only
   } else if (body.step === "instagram") {
-    const instagram = normalizeHandle(body.instagram);
     if (!instagram) {
       return Response.json(
         { ok: false, field: "instagram", error: "Use your handle, like @wanderbuddy." },
         { status: 422 },
       );
     }
-    patch.instagram = instagram;
     patch.step = "instagram";
   } else if (body.step === "details") {
     patch.creator_type = oneOf(CREATOR_TYPES, body.creator_type);
@@ -56,8 +60,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { position } = await store.upsertSignup(patch);
-    return Response.json({ ok: true, position, instagram: patch.instagram });
+    // Waitlist position is deliberately not returned: it would reveal the total signup count.
+    await store.upsertSignup(patch);
+    return Response.json({ ok: true });
   } catch (err) {
     console.error("[waitlist] failed to save signup", err);
     return Response.json(

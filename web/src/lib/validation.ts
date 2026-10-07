@@ -23,10 +23,35 @@ export function normalizeHandle(raw: unknown): string | null {
   return HANDLE_RE.test(h) ? h : null;
 }
 
+/**
+ * Stores phones in E.164 where possible. US is the default market:
+ * a bare 10-digit number (or 11 digits starting with 1) is treated as +1.
+ */
 export function normalizePhone(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  const p = raw.replace(/[^\d+]/g, "");
-  return p.replace(/\D/g, "").length >= 8 && p.length <= 16 ? p : "";
+  const digits = raw.replace(/\D/g, "");
+  if (raw.trim().startsWith("+")) return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : "";
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return "";
+}
+
+/** As-you-type formatting: "(555) 123-4567" for US, untouched digits after any other +code. */
+export function formatPhoneInput(raw: string): string {
+  const trimmed = raw.trimStart();
+  const all = trimmed.replace(/\D/g, "");
+  let digits = all;
+  const plus = trimmed.startsWith("+");
+  if (plus && digits && !digits.startsWith("1")) return `+${digits.slice(0, 15)}`;
+  // US area codes never start with 1, so a leading 1 is always the country code.
+  const country = plus || digits.startsWith("1");
+  if (country) digits = digits.slice(1);
+  const d = digits.slice(0, 10);
+  const local =
+    d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d.length > 3 ? `(${d.slice(0, 3)}) ${d.slice(3)}` : d;
+  if (!country) return local;
+  if (local) return `+1 ${local}`;
+  return all ? (plus ? "+1" : "1") : "+";
 }
 
 export function oneOf<T extends readonly string[]>(list: T, raw: unknown): T[number] | "" {
